@@ -18,11 +18,7 @@
 // For getting thread ID.
 #include <sys/syscall.h>
 #include <sys/types.h>
-#endif
-
-#include "boost/filesystem/operations.hpp"
-
-namespace bfs = boost::filesystem;
+#endif  // defined(_WIN32) || defined(_WIN64)
 
 namespace webcc {
 
@@ -36,7 +32,7 @@ static const char* kLevelNames[] = {
 
 // -----------------------------------------------------------------------------
 
-static FILE* FOpen(const bfs::path& path, bool overwrite) {
+static FILE* FOpen(const fs::path& path, bool overwrite) {
 #if (defined(_WIN32) || defined(_WIN64))
   return _wfopen(path.wstring().c_str(), overwrite ? L"w+" : L"a+");
 #else
@@ -45,10 +41,15 @@ static FILE* FOpen(const bfs::path& path, bool overwrite) {
 }
 
 struct Logger {
-  Logger() : file(nullptr), modes(0) {
+  Logger() = default;
+
+  ~Logger() {
+    if (file != nullptr) {
+      fclose(file);
+    }
   }
 
-  void Init(const bfs::path& path, int _modes) {
+  void Init(const fs::path& path, int _modes) {
     modes = _modes;
 
     // Create log file only if necessary.
@@ -57,14 +58,8 @@ struct Logger {
     }
   }
 
-  ~Logger() {
-    if (file != nullptr) {
-      fclose(file);
-    }
-  }
-
-  FILE* file;
-  int modes;
+  FILE* file = nullptr;
+  int modes = 0;
   std::mutex mutex;
 };
 
@@ -140,7 +135,7 @@ static const bool g_terminal_has_color = []() {
 static std::string DoGetThreadID() {
 #if (defined(_WIN32) || defined(_WIN64))
   auto thread_id = std::this_thread::get_id();
-  std::stringstream ss;
+  std::ostringstream ss;
   ss << thread_id;
   return ss.str();
 #else
@@ -156,22 +151,22 @@ static std::string GetThreadID() {
   return thread_id;
 }
 
-static bfs::path InitLogPath(const bfs::path& dir) {
+static fs::path InitLogPath(const fs::path& dir) {
   if (dir.empty()) {
-    return bfs::current_path() / WEBCC_LOG_FILE_NAME;
+    return fs::current_path() / WEBCC_LOG_FILE_NAME;
   }
 
-  if (!bfs::exists(dir) || !bfs::is_directory(dir)) {
-    boost::system::error_code ec;
-    if (!bfs::create_directories(dir, ec) || ec) {
-      return bfs::path{};
+  fs::error_code ec;
+  if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) {
+    if (!fs::create_directories(dir, ec) || ec) {
+      return {};
     }
   }
 
   return (dir / WEBCC_LOG_FILE_NAME);
 }
 
-void LogInit(const bfs::path& dir, int modes) {
+void LogInit(const fs::path& dir, int modes) {
   // Suppose this is called from the main thread.
   g_main_thread_id = DoGetThreadID();
 
@@ -189,7 +184,7 @@ static std::string GetTimestamp() {
   auto now = system_clock::now();
   std::time_t t = system_clock::to_time_t(now);
 
-  std::stringstream ss;
+  std::ostringstream ss;
   ss << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S");
 
   milliseconds milli_seconds =
@@ -216,7 +211,7 @@ void Log(int level, const char* file, int line, const char* format, ...) {
     va_list args;
     va_start(args, format);
 
-    fprintf(g_logger.file, "%s, %s, %7s, %20s, %4d, ",
+    fprintf(g_logger.file, "%s, %s, %7s, %25s, %4d, ",
             timestamp.c_str(), kLevelNames[level], thread_id.c_str(),
             file, line);
 
@@ -239,12 +234,12 @@ void Log(int level, const char* file, int line, const char* format, ...) {
 
     if (g_terminal_has_color) {
       if (level < WEBCC_WARN) {
-        fprintf(stderr, "%s%s, %s, %7s, %20s, %4d, ",
+        fprintf(stderr, "%s%s, %s, %7s, %25s, %4d, ",
                 TERM_RESET,
                 timestamp.c_str(), kLevelNames[level], thread_id.c_str(),
                 file, line);
       } else {
-        fprintf(stderr, "%s%s%s, %s, %7s, %20s, %4d, ",
+        fprintf(stderr, "%s%s%s, %s, %7s, %25s, %4d, ",
                 TERM_RESET,
                 level == WEBCC_WARN ? TERM_YELLOW : TERM_RED,
                 timestamp.c_str(), kLevelNames[level], thread_id.c_str(),
@@ -255,7 +250,7 @@ void Log(int level, const char* file, int line, const char* format, ...) {
 
       fprintf(stderr, "%s\n", TERM_RESET);
     } else {
-      fprintf(stderr, "%s, %s, %7s, %20s, %4d, ",
+      fprintf(stderr, "%s, %s, %7s, %25s, %4d, ",
               timestamp.c_str(), kLevelNames[level], thread_id.c_str(),
               file, line);
 

@@ -17,18 +17,15 @@ namespace webcc {
 class Url {
 public:
   // Encode URL different components.
-  static std::string EncodeHost(const std::string& utf8_str);
-  static std::string EncodePath(const std::string& utf8_str);
-  static std::string EncodeQuery(const std::string& utf8_str);
-  static std::string EncodeFull(const std::string& utf8_str);
+  static std::string EncodeHost(string_view utf8_str);
+  static std::string EncodePath(string_view utf8_str);
+  static std::string EncodeQuery(string_view utf8_str);
+  static std::string EncodeFull(string_view utf8_str);
 
 public:
   Url() = default;
 
-  explicit Url(const std::string& str, bool encode = false);
-
-  Url(Url&&) = default;
-  Url& operator=(Url&&) = default;
+  explicit Url(string_view str, bool encode = false);
 
   const std::string& scheme() const {
     return scheme_;
@@ -50,19 +47,18 @@ public:
     return query_;
   }
 
-  void set_port(const std::string& port) {
-    port_ = port;
+  void set_port(string_view port) {
+    port_ = ToString(port);
   }
 
   // Append a piece of path.
-  void AppendPath(const std::string& piece, bool encode = false);
+  void AppendPath(string_view piece, bool encode = false);
 
   // Append a query parameter.
-  void AppendQuery(const std::string& key, const std::string& value,
-                   bool encode = false);
+  void AppendQuery(string_view key, string_view value, bool encode = false);
 
 private:
-  void Parse(const std::string& str);
+  void Parse(string_view str);
 
   void Clear();
 
@@ -109,9 +105,9 @@ public:
 
   void Remove(const std::string& key);
 
-  // Return encoded query string joined with '&'.
+  // Return query string, encoded or not, joined with '&'.
   // E.g., "item=12731&color=blue&size=large".
-  std::string ToString() const;
+  std::string ToString(bool encode = true) const;
 
 private:
   using ConstIterator = std::vector<Parameter>::const_iterator;
@@ -128,13 +124,12 @@ private:
 // Used by Server::Route().
 class UrlRegex {
 public:
-  explicit UrlRegex(const std::string& url) : url_(url) {
+  explicit UrlRegex(string_view url) : url_(url) {
   }
 
   std::regex operator()() const {
     std::regex::flag_type flags = std::regex::ECMAScript | std::regex::icase;
-
-    return std::regex(url_, flags);
+    return std::regex{ url_, flags };
   }
 
 private:

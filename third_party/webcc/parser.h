@@ -4,10 +4,8 @@
 #include <fstream>
 #include <string>
 
-#include "boost/filesystem/fstream.hpp"
-#include "boost/filesystem/path.hpp"
-
 #include "webcc/common.h"
+#include "webcc/fs.h"
 #include "webcc/globals.h"
 
 namespace webcc {
@@ -20,6 +18,9 @@ class BodyHandler {
 public:
   explicit BodyHandler(Message* message) : message_(message) {
   }
+
+  BodyHandler(const BodyHandler&) = delete;
+  BodyHandler& operator=(const BodyHandler&) = delete;
 
   virtual ~BodyHandler() = default;
 
@@ -84,8 +85,8 @@ public:
 
 private:
   std::size_t streamed_size_ = 0;
-  boost::filesystem::ofstream ofstream_;
-  boost::filesystem::path temp_path_;
+  fs::ofstream ofstream_;
+  fs::path temp_path_;
 };
 
 // -----------------------------------------------------------------------------
@@ -94,10 +95,11 @@ private:
 class Parser {
 public:
   Parser();
-  virtual ~Parser() = default;
 
   Parser(const Parser&) = delete;
   Parser& operator=(const Parser&) = delete;
+
+  virtual ~Parser() = default;
 
   void Init(Message* message);
 
@@ -105,6 +107,25 @@ public:
     return finished_;
   }
 
+  // If the headers part has been parsed or not.
+  bool header_ended() const {
+  return header_ended_;
+  }
+
+  // Get the length of the headers part.
+  // Available after the headers have been parsed (see header_ended()).
+  std::size_t header_length() const {
+    return header_length_;
+  }
+
+  // The content length parsed from `Content-Length` header.
+  // kInvalidLength if the content is chunked.
+  std::size_t content_length() const {
+    return content_length_;
+  }
+
+  // Parse the given length of data.
+  // Return false if the parsing is failed.
   bool Parse(const char* data, std::size_t length);
 
 protected:
@@ -130,12 +151,14 @@ protected:
 
   bool ParseHeaderLine(const std::string& line);
 
+  // Parse the given length of data.
   virtual bool ParseContent(const char* data, std::size_t length);
 
   bool ParseFixedContent(const char* data, std::size_t length);
 
   bool ParseChunkedContent(const char* data, std::size_t length);
-  bool ParseChunkSize();
+
+  bool ParseChunkSize(const std::string& line);
 
   bool IsFixedContentFull() const;
 
@@ -143,25 +166,28 @@ protected:
   bool Finish();
 
 protected:
-  Message* message_;
+  Message* message_ = nullptr;
 
   std::unique_ptr<BodyHandler> body_handler_;
 
   // Data streaming or not.
-  bool stream_;
+  bool stream_ = false;
 
   // Data waiting to be parsed.
   std::string pending_data_;
 
+  // The length of the headers part.
+  std::size_t header_length_ = 0;
+
   // Temporary data and helper flags for parsing.
-  std::size_t content_length_;
+  std::size_t content_length_ = kInvalidLength;
   ContentType content_type_;
-  bool start_line_parsed_;
-  bool content_length_parsed_;
-  bool header_ended_;
-  bool chunked_;
-  std::size_t chunk_size_;
-  bool finished_;
+  bool start_line_parsed_ = false;
+  bool content_length_parsed_ = false;
+  bool header_ended_ = false;
+  bool chunked_ = false;
+  std::size_t chunk_size_ = kInvalidLength;
+  bool finished_ = false;
 };
 
 }  // namespace webcc

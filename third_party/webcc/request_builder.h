@@ -4,26 +4,29 @@
 #include <string>
 #include <vector>
 
-#include "boost/filesystem/path.hpp"
-
+#include "webcc/fs.h"
 #include "webcc/request.h"
 #include "webcc/url.h"
 
 // -----------------------------------------------------------------------------
 // Handy macros for creating a RequestBuilder.
 
-#define WEBCC_GET(url) webcc::RequestBuilder{}.Get(url, false)
-#define WEBCC_GET_ENC(url) webcc::RequestBuilder{}.Get(url, true)
-#define WEBCC_HEAD(url) webcc::RequestBuilder{}.Head(url, false)
-#define WEBCC_HEAD_ENC(url) webcc::RequestBuilder{}.Head(url, true)
-#define WEBCC_POST(url) webcc::RequestBuilder{}.Post(url, false)
-#define WEBCC_POST_ENC(url) webcc::RequestBuilder{}.Post(url, true)
-#define WEBCC_PUT(url) webcc::RequestBuilder{}.Put(url, false)
-#define WEBCC_PUT_ENC(url) webcc::RequestBuilder{}.Put(url, true)
-#define WEBCC_DELETE(url) webcc::RequestBuilder{}.Delete(url, false)
-#define WEBCC_DELETE_ENC(url) webcc::RequestBuilder{}.Delete(url, true)
-#define WEBCC_PATCH(url) webcc::RequestBuilder{}.Patch(url, false)
-#define WEBCC_PATCH_ENC(url) webcc::RequestBuilder{}.Patch(url, true)
+#define WEBCC_RB webcc::RequestBuilder{}
+
+// clang-format off
+#define WEBCC_GET(url)          WEBCC_RB.Get(url, false)
+#define WEBCC_GET_ENC(url)      WEBCC_RB.Get(url, true)
+#define WEBCC_HEAD(url)         WEBCC_RB.Head(url, false)
+#define WEBCC_HEAD_ENC(url)     WEBCC_RB.Head(url, true)
+#define WEBCC_POST(url)         WEBCC_RB.Post(url, false)
+#define WEBCC_POST_ENC(url)     WEBCC_RB.Post(url, true)
+#define WEBCC_PUT(url)          WEBCC_RB.Put(url, false)
+#define WEBCC_PUT_ENC(url)      WEBCC_RB.Put(url, true)
+#define WEBCC_DELETE(url)       WEBCC_RB.Delete(url, false)
+#define WEBCC_DELETE_ENC(url)   WEBCC_RB.Delete(url, true)
+#define WEBCC_PATCH(url)        WEBCC_RB.Patch(url, false)
+#define WEBCC_PATCH_ENC(url)    WEBCC_RB.Patch(url, true)
+// clang-format on
 
 // -----------------------------------------------------------------------------
 
@@ -36,44 +39,44 @@ public:
   RequestBuilder(const RequestBuilder&) = delete;
   RequestBuilder& operator=(const RequestBuilder&) = delete;
 
-  // Build
+  // Build and return the request object.
   RequestPtr operator()();
 
-  RequestBuilder& Method(const std::string& method) {
-    method_ = method;
+  RequestBuilder& Method(string_view method) {
+    method_ = ToString(method);
     return *this;
   }
 
-  RequestBuilder& Get(const std::string& url, bool encode = false) {
+  RequestBuilder& Get(string_view url, bool encode = false) {
     return Method(methods::kGet).Url(url, encode);
   }
 
-  RequestBuilder& Head(const std::string& url, bool encode = false) {
+  RequestBuilder& Head(string_view url, bool encode = false) {
     return Method(methods::kHead).Url(url, encode);
   }
 
-  RequestBuilder& Post(const std::string& url, bool encode = false) {
+  RequestBuilder& Post(string_view url, bool encode = false) {
     return Method(methods::kPost).Url(url, encode);
   }
 
-  RequestBuilder& Put(const std::string& url, bool encode = false) {
+  RequestBuilder& Put(string_view url, bool encode = false) {
     return Method(methods::kPut).Url(url, encode);
   }
 
-  RequestBuilder& Delete(const std::string& url, bool encode = false) {
+  RequestBuilder& Delete(string_view url, bool encode = false) {
     return Method(methods::kDelete).Url(url, encode);
   }
 
-  RequestBuilder& Patch(const std::string& url, bool encode = false) {
+  RequestBuilder& Patch(string_view url, bool encode = false) {
     return Method(methods::kPatch).Url(url, encode);
   }
 
-  RequestBuilder& Url(const std::string& url, bool encode = false) {
+  RequestBuilder& Url(string_view url, bool encode = false) {
     url_ = webcc::Url{ url, encode };
     return *this;
   }
 
-  RequestBuilder& Port(const std::string& port) {
+  RequestBuilder& Port(string_view port) {
     url_.set_port(port);
     return *this;
   }
@@ -84,25 +87,25 @@ public:
   }
 
   // Append a piece to the path.
-  RequestBuilder& Path(const std::string& path, bool encode = false) {
+  RequestBuilder& Path(string_view path, bool encode = false) {
     url_.AppendPath(path, encode);
     return *this;
   }
 
   // Append a parameter to the query.
-  RequestBuilder& Query(const std::string& key, const std::string& value,
+  RequestBuilder& Query(string_view key, string_view value,
                         bool encode = false) {
     url_.AppendQuery(key, value, encode);
     return *this;
   }
 
-  RequestBuilder& MediaType(const std::string& media_type) {
-    media_type_ = media_type;
+  RequestBuilder& MediaType(string_view media_type) {
+    media_type_ = ToString(media_type);
     return *this;
   }
 
-  RequestBuilder& Charset(const std::string& charset) {
-    charset_ = charset;
+  RequestBuilder& Charset(string_view charset) {
+    charset_ = ToString(charset);
     return *this;
   }
 
@@ -120,9 +123,16 @@ public:
 
   // Set (comma separated) content types to accept.
   // E.g., "application/json", "text/html, application/xhtml+xml".
-  RequestBuilder& Accept(const std::string& content_types) {
+  RequestBuilder& Accept(string_view content_types) {
     return Header(headers::kAccept, content_types);
   }
+
+#if WEBCC_ENABLE_GZIP
+
+  // Accept Gzip compressed response data or not.
+  RequestBuilder& AcceptGzip(bool gzip = true);
+
+#endif  // WEBCC_ENABLE_GZIP
 
   RequestBuilder& Body(const std::string& data) {
     body_.reset(new StringBody{ data, false });
@@ -136,8 +146,7 @@ public:
 
   // Use the file content as body.
   // NOTE: Error::kFileError might be thrown.
-  RequestBuilder& File(const boost::filesystem::path& path,
-                       bool infer_media_type = true,
+  RequestBuilder& File(const fs::path& path, bool infer_media_type = true,
                        std::size_t chunk_size = 1024);
 
   // Add a form part.
@@ -147,36 +156,41 @@ public:
   }
 
   // Add a form part of file.
-  RequestBuilder& FormFile(const std::string& name,
-                           const boost::filesystem::path& path,
-                           const std::string& media_type = "");
+  RequestBuilder& FormFile(string_view name, const fs::path& path,
+                           string_view media_type = "");
 
   // Add a form part of string data.
-  RequestBuilder& FormData(const std::string& name, std::string&& data,
-                           const std::string& media_type = "");
+  RequestBuilder& FormData(string_view name, std::string&& data,
+                           string_view media_type = "");
 
-  RequestBuilder& Header(const std::string& key, const std::string& value);
+  RequestBuilder& Header(string_view key, string_view value);
 
   RequestBuilder& KeepAlive(bool keep_alive = true) {
     keep_alive_ = keep_alive;
     return *this;
   }
 
-  RequestBuilder& Auth(const std::string& type, const std::string& credentials);
+  RequestBuilder& Auth(string_view type, string_view credentials);
 
-  RequestBuilder& AuthBasic(const std::string& login,
-                            const std::string& password);
+  RequestBuilder& AuthBasic(string_view login, string_view password);
 
-  RequestBuilder& AuthToken(const std::string& token);
+  RequestBuilder& AuthToken(string_view token);
 
   // Add the `Date` header to the request.
   RequestBuilder& Date();
 
 #if WEBCC_ENABLE_GZIP
+
+  // Compress the body data (only for string body).
+  // NOTE:
+  // Most servers don't support compressed requests.
+  // Even the requests module from Python doesn't have a built-in support.
+  // See: https://github.com/kennethreitz/requests/issues/1753
   RequestBuilder& Gzip(bool gzip = true) {
     gzip_ = gzip;
     return *this;
   }
+
 #endif  // WEBCC_ENABLE_GZIP
 
 private:
@@ -207,11 +221,6 @@ private:
   bool keep_alive_ = true;
 
 #if WEBCC_ENABLE_GZIP
-  // Compress the body data (only for string body).
-  // NOTE:
-  // Most servers don't support compressed requests.
-  // Even the requests module from Python doesn't have a built-in support.
-  // See: https://github.com/kennethreitz/requests/issues/1753
   bool gzip_ = false;
 #endif  // WEBCC_ENABLE_GZIP
 };

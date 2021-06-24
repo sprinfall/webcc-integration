@@ -2,18 +2,18 @@
 
 #include <algorithm>
 
+#include "boost/algorithm/string.hpp"
+
 #include "webcc/logger.h"
-#include "webcc/string.h"
 
 namespace webcc {
 
-bool Router::Route(const std::string& url, ViewPtr view,
-                   const Strings& methods) {
+bool Router::Route(string_view url, ViewPtr view, const Strings& methods) {
   assert(view);
 
   // TODO: More error check
 
-  routes_.push_back({ url, {}, view, methods });
+  routes_.push_back({ ToString(url), {}, view, methods });
 
   return true;
 }
@@ -25,7 +25,6 @@ bool Router::Route(const UrlRegex& regex_url, ViewPtr view,
   // TODO: More error check
 
   try {
-
     routes_.push_back({ "", regex_url(), view, methods });
 
   } catch (const std::regex_error& e) {
@@ -59,7 +58,7 @@ ViewPtr Router::FindView(const std::string& method, const std::string& url,
         return route.view;
       }
     } else {
-      if (iequals(route.url, url)) {
+      if (boost::iequals(route.url, url)) {
         return route.view;
       }
     }
@@ -87,7 +86,7 @@ bool Router::MatchView(const std::string& method, const std::string& url,
         return true;
       }
     } else {
-      if (iequals(route.url, url)) {
+      if (boost::iequals(route.url, url)) {
         *stream = route.view->Stream(method);
         return true;
       }

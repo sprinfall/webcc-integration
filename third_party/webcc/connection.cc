@@ -12,9 +12,10 @@ using boost::asio::ip::tcp;
 namespace webcc {
 
 Connection::Connection(tcp::socket socket, ConnectionPool* pool,
-                       Queue<ConnectionPtr>* queue, ViewMatcher&& view_matcher)
+                       Queue<ConnectionPtr>* queue, ViewMatcher&& view_matcher,
+                       std::size_t buffer_size)
     : socket_(std::move(socket)), pool_(pool), queue_(queue),
-      view_matcher_(std::move(view_matcher)), buffer_(kBufferSize) {
+      view_matcher_(std::move(view_matcher)), buffer_(buffer_size) {
 }
 
 void Connection::Start() {
@@ -23,15 +24,16 @@ void Connection::Start() {
   boost::system::error_code ec;
   auto endpoint = socket_.remote_endpoint(ec);
   if (!ec) {
-    request_->set_ip(endpoint.address().to_string());
+    request_->set_address(endpoint.address().to_string());
   }
 
   request_parser_.Init(request_.get(), view_matcher_);
-  DoRead();
+
+  AsyncRead();
 }
 
 void Connection::Close() {
-  LOG_INFO("Shutdown socket...");
+  LOG_INFO("Shutdown socket");
 
   // Initiate graceful connection closure.
   // Socket close VS. shutdown:
@@ -40,17 +42,17 @@ void Connection::Close() {
   socket_.shutdown(tcp::socket::shutdown_both, ec);
 
   if (ec) {
-    LOG_WARN("Socket shutdown error (%s).", ec.message().c_str());
+    LOG_WARN("Socket shutdown error (%s)", ec.message().c_str());
     ec.clear();
     // Don't return, try to close the socket anywhere.
   }
 
-  LOG_INFO("Close socket...");
+  LOG_INFO("Close socket");
 
   socket_.close(ec);
 
   if (ec) {
-    LOG_ERRO("Socket close error (%s).", ec.message().c_str());
+    LOG_ERRO("Socket close error (%s)", ec.message().c_str());
   }
 }
 
@@ -67,7 +69,7 @@ void Connection::SendResponse(ResponsePtr response, bool no_keep_alive) {
 
   response_->Prepare();
 
-  DoWrite();
+  AsyncWrite();
 }
 
 void Connection::SendResponse(Status status, bool no_keep_alive) {
@@ -81,7 +83,11 @@ void Connection::SendResponse(Status status, bool no_keep_alive) {
   SendResponse(response, no_keep_alive);
 }
 
-void Connection::DoRead() {
+void Connection::AsyncRead() {
+#if WEBCC_STUDY_SERVER_THREADING
+  LOG_USER("[%u] AsyncRead()", (unsigned int)this);
+#endif
+
   socket_.async_read_some(boost::asio::buffer(buffer_),
                           std::bind(&Connection::OnRead, shared_from_this(),
                                     std::placeholders::_1,
@@ -89,15 +95,19 @@ void Connection::DoRead() {
 }
 
 void Connection::OnRead(boost::system::error_code ec, std::size_t length) {
+#if WEBCC_STUDY_SERVER_THREADING
+  LOG_USER("[%u] OnRead()", (unsigned int)this);
+#endif
+
   if (ec) {
     if (ec == boost::asio::error::eof) {
-      LOG_INFO("Socket read EOF (%s).", ec.message().c_str());
+      LOG_INFO("Socket read EOF (%s)", ec.message().c_str());
     } else if (ec == boost::asio::error::operation_aborted) {
       // The socket of this connection has been closed.
       // This happens, e.g., when the server was stopped by a signal (Ctrl-C).
-      LOG_WARN("Socket operation aborted (%s).", ec.message().c_str());
+      LOG_WARN("Socket operation aborted (%s)", ec.message().c_str());
     } else {
-      LOG_ERRO("Socket read error (%s).", ec.message().c_str());
+      LOG_ERRO("Socket read error (%s)", ec.message().c_str());
     }
 
     // Don't try to send any response back.
@@ -110,7 +120,7 @@ void Connection::OnRead(boost::system::error_code ec, std::size_t length) {
   }
 
   if (!request_parser_.Parse(buffer_.data(), length)) {
-    LOG_ERRO("Failed to parse HTTP request.");
+    LOG_ERRO("Failed to parse request");
     // Send Bad Request (400) to the client and no Keep-Alive.
     SendResponse(Status::kBadRequest, true);
     // Close the socket connection.
@@ -120,19 +130,23 @@ void Connection::OnRead(boost::system::error_code ec, std::size_t length) {
 
   if (!request_parser_.finished()) {
     // Continue to read the request.
-    DoRead();
+    AsyncRead();
     return;
   }
 
-  LOG_VERB("HTTP request:\n%s", request_->Dump().c_str());
+  LOG_VERB("Request:\n%s", request_->Dump().c_str());
 
   // Enqueue this connection once the request has been read.
   // Some worker thread will handle the request later.
   queue_->Push(shared_from_this());
 }
 
-void Connection::DoWrite() {
-  LOG_VERB("HTTP response:\n%s", response_->Dump().c_str());
+void Connection::AsyncWrite() {
+#if WEBCC_STUDY_SERVER_THREADING
+  LOG_USER("[%u] AsyncWrite()", (unsigned int)this);
+#endif
+
+  LOG_VERB("Response:\n%s", response_->Dump().c_str());
 
   // Firstly, write the headers.
   boost::asio::async_write(socket_, response_->GetPayload(),
@@ -143,16 +157,20 @@ void Connection::DoWrite() {
 
 void Connection::OnWriteHeaders(boost::system::error_code ec,
                                 std::size_t length) {
+#if WEBCC_STUDY_SERVER_THREADING
+  LOG_USER("[%u] OnWriteHeaders()", (unsigned int)this);
+#endif
+
   if (ec) {
-    OnWriteError(ec);
+    HandleWriteError(ec);
   } else {
     // Write the body payload by payload.
     response_->body()->InitPayload();
-    DoWriteBody();
+    AsyncWriteBody();
   }
 }
 
-void Connection::DoWriteBody() {
+void Connection::AsyncWriteBody() {
   auto payload = response_->body()->NextPayload();
 
   if (!payload.empty()) {
@@ -163,32 +181,36 @@ void Connection::DoWriteBody() {
                                        std::placeholders::_2));
   } else {
     // No more body payload left, we're done.
-    OnWriteOK();
+    HandleWriteOK();
   }
 }
 
 void Connection::OnWriteBody(boost::system::error_code ec, std::size_t length) {
+#if WEBCC_STUDY_SERVER_THREADING
+  LOG_USER("[%u] OnWriteBody()", (unsigned int)this);
+#endif
+
   if (ec) {
-    OnWriteError(ec);
+    HandleWriteError(ec);
   } else {
-    DoWriteBody();
+    AsyncWriteBody();
   }
 }
 
-void Connection::OnWriteOK() {
-  LOG_INFO("Response has been sent back.");
+void Connection::HandleWriteOK() {
+  LOG_INFO("Response has been sent back");
 
   if (request_->IsConnectionKeepAlive()) {
-    LOG_INFO("The client asked for a keep-alive connection.");
-    LOG_INFO("Continue to read the next request...");
+    LOG_INFO("The client asked for a keep-alive connection");
+    LOG_INFO("Continue to read the next request");
     Start();
   } else {
     pool_->Close(shared_from_this());
   }
 }
 
-void Connection::OnWriteError(boost::system::error_code ec) {
-  LOG_ERRO("Socket write error (%s).", ec.message().c_str());
+void Connection::HandleWriteError(boost::system::error_code ec) {
+  LOG_ERRO("Socket write error (%s)", ec.message().c_str());
 
   if (ec != boost::asio::error::operation_aborted) {
     pool_->Close(shared_from_this());

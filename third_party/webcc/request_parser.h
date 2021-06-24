@@ -26,8 +26,6 @@ private:
   // asks for data streaming.
   bool OnHeadersEnd() override;
 
-  bool Stream() const;
-
   bool ParseStartLine(const std::string& line) override;
 
   // Override to handle multipart form data which is request only.
@@ -37,28 +35,29 @@ private:
 
   bool ParseMultipartContent(const char* data, std::size_t length);
   bool ParsePartHeaders(bool* need_more_data);
-  bool GetNextBoundaryLine(std::size_t* b_off, std::size_t* b_count,
-                           bool* ended);
+  bool GetNextBoundaryLine(std::size_t* b_off, std::size_t* b_len, bool* ended);
 
   // Check if the str.substr(off, count) is a boundary.
   bool IsBoundary(const std::string& str, std::size_t off,
                   std::size_t count, bool* end = nullptr) const;
 
 private:
-  Request* request_;
+  // The result request message.
+  Request* request_ = nullptr;
 
   // A function for matching view once the headers of a request has been
   // received. The parsing will stop and fail if no view can be matched.
   ViewMatcher view_matcher_;
 
-  // Form data parsing step.
-  enum Step {
+  // Form data parsing steps.
+  enum class Step {
     kStart,
     kBoundaryParsed,
     kHeadersParsed,
     kEnded,
   };
-  Step step_ = kStart;
+
+  Step step_ = Step::kStart;
 
   // The current form part being parsed.
   FormPartPtr part_;

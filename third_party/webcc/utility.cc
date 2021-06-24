@@ -7,12 +7,10 @@
 #include <iostream>
 #include <sstream>
 
-#include "boost/filesystem/fstream.hpp"
-
 #include "webcc/string.h"
 #include "webcc/version.h"
 
-namespace bfs = boost::filesystem;
+using boost::asio::ip::tcp;
 
 namespace webcc {
 namespace utility {
@@ -24,46 +22,26 @@ const std::string& UserAgent() {
 
 std::string HttpDate() {
   std::time_t t = std::time(nullptr);
-  tm* gmt = std::gmtime(&t);
+  std::tm gmt = *std::gmtime(&t);
 
-  // Either put_time() or strftime() could format the date as expected, but they
-  // are both locale dependent!
-  //
-  //   std::stringstream ss;
-  //   ss << std::put_time(gmt, "%a, %d %b %Y %H:%M:%S") << " GMT";
-  //   return ss.str();
-  // 
-  //   char buf[26];
-  //   std::strftime(buf, 26, "%a, %d %b %Y %H:%M:%S", gmt);
-
-  static const char* const kDays[7] = { "Sun", "Mon", "Tue", "Wed",
-                                        "Thu", "Fri", "Sat" };
-
-  static const char* const kMonths[12] = { "Jan", "Feb", "Mar", "Apr",
-                                           "May", "Jun", "Jul", "Aug",
-                                           "Sep", "Oct", "Nov", "Dec" };
-
-  char buf[26];
-
-  std::snprintf(buf, 26, "%s, %.2i %s %i %.2i:%.2i:%.2i", kDays[gmt->tm_wday],
-               gmt->tm_mday, kMonths[gmt->tm_mon], gmt->tm_year + 1900,
-               gmt->tm_hour, gmt->tm_min, gmt->tm_sec);
-
-  return std::string(buf) + " GMT";
+  std::ostringstream date;
+  date.imbue(std::locale::classic());  // Use classic C locale
+  date << std::put_time(&gmt, "%a, %d %b %Y %H:%M:%S GMT");
+  return date.str();
 }
 
-std::size_t TellSize(const bfs::path& path) {
+std::size_t TellSize(const fs::path& path) {
   // Flag "ate": seek to the end of stream immediately after open.
-  bfs::ifstream stream{ path, std::ios::binary | std::ios::ate };
+  fs::ifstream stream{ path, std::ios::binary | std::ios::ate };
   if (stream.fail()) {
     return kInvalidLength;
   }
   return static_cast<std::size_t>(stream.tellg());
 }
 
-bool ReadFile(const bfs::path& path, std::string* output) {
+bool ReadFile(const fs::path& path, std::string* output) {
   // Flag "ate": seek to the end of stream immediately after open.
-  bfs::ifstream stream{ path, std::ios::binary | std::ios::ate };
+  fs::ifstream stream{ path, std::ios::binary | std::ios::ate };
   if (stream.fail()) {
     return false;
   }
@@ -78,18 +56,17 @@ bool ReadFile(const bfs::path& path, std::string* output) {
   return true;
 }
 
-void DumpByLine(const std::string& data, std::ostream& os,
-                const std::string& prefix) {
-  std::vector<std::string> lines;
-  split(lines, data, '\n');
+void DumpByLine(const std::string& data, std::ostream& os, string_view prefix) {
+  std::vector<string_view> lines;
+  Split(data, '\n', false, &lines);
 
   std::size_t size = 0;
 
-  for (const std::string& line : lines) {
+  for (const auto& line : lines) {
     os << prefix;
 
     if (line.size() + size > kMaxDumpSize) {
-      os.write(line.c_str(), kMaxDumpSize - size);
+      os.write(line.data(), kMaxDumpSize - size);
       os << "..." << std::endl;
       break;
     } else {
@@ -99,18 +76,17 @@ void DumpByLine(const std::string& data, std::ostream& os,
   }
 }
 
-void PrintEndpoint(std::ostream& ostream,
-                   const boost::asio::ip::tcp::endpoint& endpoint) {
+void PrintEndpoint(std::ostream& ostream, const tcp::endpoint& endpoint) {
   ostream << endpoint;
-  if (endpoint.protocol() == boost::asio::ip::tcp::v4()) {
+  if (endpoint.protocol() == tcp::v4()) {
     ostream << ", v4";
-  } else if (endpoint.protocol() == boost::asio::ip::tcp::v6()) {
+  } else if (endpoint.protocol() == tcp::v6()) {
     ostream << ", v6";
   }
 }
 
-std::string EndpointToString(const boost::asio::ip::tcp::endpoint& endpoint) {
-  std::stringstream ss;
+std::string EndpointToString(const tcp::endpoint& endpoint) {
+  std::ostringstream ss;
   PrintEndpoint(ss, endpoint);
   return ss.str();
 }

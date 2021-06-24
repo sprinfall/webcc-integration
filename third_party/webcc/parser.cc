@@ -1,6 +1,6 @@
 #include "webcc/parser.h"
 
-#include "boost/filesystem/operations.hpp"
+#include "boost/algorithm/string.hpp"
 
 #include "webcc/logger.h"
 #include "webcc/message.h"
@@ -10,8 +10,6 @@
 #if WEBCC_ENABLE_GZIP
 #include "webcc/gzip.h"
 #endif
-
-namespace bfs = boost::filesystem;
 
 namespace webcc {
 
@@ -49,14 +47,14 @@ bool StringBodyHandler::Finish() {
   auto body = std::make_shared<StringBody>(std::move(content_), IsCompressed());
 
 #if WEBCC_ENABLE_GZIP
-  LOG_INFO("Decompress the HTTP content...");
+  LOG_INFO("Decompress the HTTP content");
   if (!body->Decompress()) {
-    LOG_ERRO("Cannot decompress the HTTP content!");
+    LOG_ERRO("Cannot decompress the HTTP content");
     return false;
   }
 #else
   if (body->compressed()) {
-    LOG_WARN("Compressed HTTP content remains untouched.");
+    LOG_WARN("Compressed HTTP content remains untouched");
   }
 #endif  // WEBCC_ENABLE_GZIP
 
@@ -69,17 +67,17 @@ bool StringBodyHandler::Finish() {
 
 bool FileBodyHandler::OpenFile() {
   try {
-    temp_path_ = bfs::temp_directory_path();
+    temp_path_ = fs::temp_directory_path();
 
     // Generate a random string as file name.
     // A replacement of boost::filesystem::unique_path().
-    temp_path_ /= random_string(10);
+    temp_path_ /= RandomString(10);
 
     LOG_VERB("Generate a temp path for streaming: %s",
              temp_path_.string().c_str());
 
-  } catch (const bfs::filesystem_error&) {
-    LOG_ERRO("Failed to generate temp path for streaming.");
+  } catch (const fs::filesystem_error&) {
+    LOG_ERRO("Failed to generate temp path for streaming");
     return false;
   }
 
@@ -132,6 +130,8 @@ bool Parser::Parse(const char* data, std::size_t length) {
     return ParseContent(data, length);
   }
 
+  header_length_ += length;
+
   // Append the new data to the pending data.
   pending_data_.append(data, length);
 
@@ -140,11 +140,13 @@ bool Parser::Parse(const char* data, std::size_t length) {
   }
 
   if (!header_ended_) {
-    LOG_INFO("HTTP headers will continue in next read.");
+    LOG_INFO("HTTP headers will continue in next read");
     return true;
   }
 
-  LOG_INFO("HTTP headers just ended.");
+  LOG_INFO("HTTP headers just ended");
+
+  header_length_ -= pending_data_.size();
 
   if (!OnHeadersEnd()) {
     // Only request parser can reach here when no view matches the request.
@@ -170,6 +172,7 @@ void Parser::Reset() {
   stream_ = false;
 
   pending_data_.clear();
+  header_length_ = 0;
 
   content_length_ = kInvalidLength;
   content_type_.Reset();
@@ -254,30 +257,30 @@ bool Parser::GetNextLine(std::size_t off, std::string* line, bool erase) {
 
 bool Parser::ParseHeaderLine(const std::string& line) {
   Header header;
-  if (!split_kv(header.first, header.second, line, ':')) {
+  if (!SplitKV(line, ':', true, &header.first, &header.second)) {
     LOG_ERRO("Invalid header: %s", line.c_str());
     return false;
   }
 
-  if (iequals(header.first, headers::kContentLength)) {
+  if (boost::iequals(header.first, headers::kContentLength)) {
     content_length_parsed_ = true;
 
     std::size_t content_length = kInvalidLength;
-    if (!to_size_t(header.second, 10, &content_length)) {
-      LOG_ERRO("Invalid content length: %s.", header.second.c_str());
+    if (!ToSizeT(header.second, 10, &content_length)) {
+      LOG_ERRO("Invalid content length: %s", header.second.c_str());
       return false;
     }
 
-    LOG_INFO("Content length: %u.", content_length);
+    LOG_INFO("Content length: %u", content_length);
     content_length_ = content_length;
 
-  } else if (iequals(header.first, headers::kContentType)) {
+  } else if (boost::iequals(header.first, headers::kContentType)) {
     content_type_.Parse(header.second);
     if (!content_type_.Valid()) {
       LOG_ERRO("Invalid content-type header: %s", header.second.c_str());
       return false;
     }
-  } else if (iequals(header.first, headers::kTransferEncoding)) {
+  } else if (boost::iequals(header.first, headers::kTransferEncoding)) {
     if (header.second == "chunked") {
       // The content is chunked.
       chunked_ = true;
@@ -330,13 +333,27 @@ bool Parser::ParseChunkedContent(const char* data, std::size_t length) {
   pending_data_.append(data, length);
 
   while (true) {
+    if (pending_data_.empty()) {
+      // Wait for more data from next read.
+      break;
+    }
+
     // Read chunk-size if necessary.
     if (chunk_size_ == kInvalidLength) {
-      if (!ParseChunkSize()) {
+      std::string line;
+      if (!GetNextLine(0, &line, true)) {
+        // Need more data from next read.
+        // Normally, it shouldn't be here since the chunk size line is very
+        // short.
+        break;
+      }
+
+      if (!ParseChunkSize(line)) {
+        // Invalid chunk size, stop the parsing.
         return false;
       }
 
-      LOG_VERB("Chunk size: %u.", chunk_size_);
+      LOG_VERB("Chunk size: %u", chunk_size_);
     }
 
     if (chunk_size_ == 0) {
@@ -347,6 +364,8 @@ bool Parser::ParseChunkedContent(const char* data, std::size_t length) {
     if (chunk_size_ + 2 <= pending_data_.size()) {  // +2 for CRLF
       body_handler_->AddContent(pending_data_.c_str(), chunk_size_);
 
+      // Pending data might become empty after erase. See the empty check at the
+      // beginning of the loop.
       pending_data_.erase(0, chunk_size_ + 2);
 
       // Reset chunk-size (NOT to 0).
@@ -377,18 +396,10 @@ bool Parser::ParseChunkedContent(const char* data, std::size_t length) {
   return true;
 }
 
-bool Parser::ParseChunkSize() {
-  LOG_VERB("Parse chunk size.");
-
-  std::string line;
-  if (!GetNextLine(0, &line, true)) {
-    return true;
-  }
-
-  LOG_VERB("Chunk size line: [%s].", line.c_str());
+bool Parser::ParseChunkSize(const std::string& line) {
+  LOG_VERB("Chunk size line: [%s]", line.c_str());
 
   std::string hex_str;  // e.g., "cf0" (3312)
-
   std::size_t pos = line.find(' ');
   if (pos != std::string::npos) {
     hex_str = line.substr(0, pos);
@@ -396,8 +407,8 @@ bool Parser::ParseChunkSize() {
     hex_str = line;
   }
 
-  if (!to_size_t(hex_str, 16, &chunk_size_)) {
-    LOG_ERRO("Invalid chunk-size: %s.", hex_str.c_str());
+  if (!ToSizeT(hex_str, 16, &chunk_size_)) {
+    LOG_ERRO("Invalid chunk-size: %s", hex_str.c_str());
     return false;
   }
 

@@ -5,14 +5,13 @@
 #include <thread>
 #include <vector>
 
-#include "boost/filesystem/path.hpp"
-
 #include "boost/asio/io_context.hpp"
 #include "boost/asio/ip/tcp.hpp"
 #include "boost/asio/signal_set.hpp"
 
 #include "webcc/connection.h"
 #include "webcc/connection_pool.h"
+#include "webcc/fs.h"
 #include "webcc/queue.h"
 #include "webcc/router.h"
 #include "webcc/url.h"
@@ -22,12 +21,18 @@ namespace webcc {
 class Server : public Router {
 public:
   Server(boost::asio::ip::tcp protocol, std::uint16_t port,
-         const boost::filesystem::path& doc_root = {});
-
-  ~Server() = default;
+         const fs::path& doc_root = {});
 
   Server(const Server&) = delete;
   Server& operator=(const Server&) = delete;
+
+  ~Server() = default;
+
+  void set_buffer_size(std::size_t buffer_size) {
+    if (buffer_size > 0) {
+      buffer_size_ = buffer_size;
+    }
+  }
 
   void set_file_chunk_size(std::size_t file_chunk_size) {
     assert(file_chunk_size > 0);
@@ -84,7 +89,7 @@ private:
   // The connection will keep alive if it's a persistent connection. When next
   // request comes, this connection will be put back to the queue again.
   virtual void Handle(ConnectionPtr connection);
- 
+
   // Match the view by HTTP method and URL (path).
   // Return if a view or static file is matched or not.
   // If the view asks for data streaming, |stream| will be set to true.
@@ -99,17 +104,20 @@ private:
   boost::asio::ip::tcp protocol_;
 
   // Port number.
-  std::uint16_t port_;
+  std::uint16_t port_ = 0;
 
   // The directory with the static files to be served.
-  boost::filesystem::path doc_root_;
+  fs::path doc_root_;
+
+  // The size of the buffer for reading request.
+  std::size_t buffer_size_ = kBufferSize;
 
   // The size of the chunk loaded into memory each time when serving a
   // static file.
-  std::size_t file_chunk_size_;
+  std::size_t file_chunk_size_ = 1024;
 
   // Is the server running?
-  bool running_;
+  bool running_ = false;
 
   // The mutex for guarding the state of the server.
   std::mutex state_mutex_;

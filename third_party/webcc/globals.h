@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <exception>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -11,7 +12,29 @@
 
 #include "webcc/config.h"
 
+#if WEBCC_USE_STD_STRING_VIEW
+#include <string_view>
+#else
+#include "boost/utility/string_view.hpp"
+#endif  // WEBCC_USE_STD_STRING_VIEW
+
 namespace webcc {
+
+// -----------------------------------------------------------------------------
+
+#if WEBCC_USE_STD_STRING_VIEW
+using string_view = std::string_view;
+#else
+using string_view = boost::string_view;
+#endif  // WEBCC_USE_STD_STRING_VIEW
+
+inline std::string ToString(string_view sv) {
+#if WEBCC_USE_STD_STRING_VIEW
+  return std::string{ sv.begin(), sv.end() };
+#else
+  return sv.to_string();
+#endif  // WEBCC_USE_STD_STRING_VIEW
+}
 
 // -----------------------------------------------------------------------------
 
@@ -23,11 +46,14 @@ using UrlArgs = std::vector<std::string>;
 
 using Payload = std::vector<boost::asio::const_buffer>;
 
+using ProgressCallback =
+    std::function<void(std::size_t length, std::size_t total_length)>;
+
 // -----------------------------------------------------------------------------
 
 const char* const kCRLF = "\r\n";
 
-const std::size_t kInvalidLength = std::string::npos;
+const std::size_t kInvalidLength = -1;
 
 // Default timeout for reading response.
 const int kMaxReadSeconds = 30;
@@ -105,6 +131,7 @@ const char* const kAuthorization = "Authorization";
 const char* const kContentType = "Content-Type";
 const char* const kContentLength = "Content-Length";
 const char* const kContentEncoding = "Content-Encoding";
+const char* const kContentMD5 = "Content-MD5";
 const char* const kContentDisposition = "Content-Disposition";
 const char* const kConnection = "Connection";
 const char* const kTransferEncoding = "Transfer-Encoding";
@@ -122,6 +149,8 @@ namespace media_types {
 
 const char* const kApplicationJson = "application/json";
 const char* const kApplicationSoapXml = "application/soap+xml";
+const char* const kApplicationFormUrlEncoded =
+    "application/x-www-form-urlencoded";
 const char* const kTextPlain = "text/plain";
 const char* const kTextXml = "text/xml";
 
@@ -150,6 +179,7 @@ public:
   enum Code {
     kUnknownError = -1,
     kOK = 0,
+    kStateError,
     kSyntaxError,
     kResolveError,
     kConnectError,
@@ -161,12 +191,12 @@ public:
   };
 
 public:
-  Error(Code code = kOK, const std::string& message = "")
-      : code_(code), message_(message), timeout_(false) {
+  explicit Error(Code code = kOK, string_view message = "")
+      : code_(code), message_(message) {
   }
 
   // Note that `noexcept` is required by GCC.
-  const char* what() const noexcept override{
+  const char* what() const noexcept override {
     return message_.c_str();
   }
 
@@ -178,9 +208,9 @@ public:
     return message_;
   }
 
-  void Set(Code code, const std::string& message) {
+  void Set(Code code, string_view message) {
     code_ = code;
-    message_ = message;
+    message_ = ToString(message);
   }
 
   bool timeout() const {
@@ -198,7 +228,7 @@ public:
 private:
   Code code_;
   std::string message_;
-  bool timeout_;
+  bool timeout_ = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const Error& error);

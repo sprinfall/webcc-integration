@@ -2,6 +2,8 @@
 
 #include <vector>
 
+#include "boost/algorithm/string.hpp"
+
 #include "webcc/logger.h"
 #include "webcc/request.h"
 #include "webcc/string.h"
@@ -34,15 +36,15 @@ bool RequestParser::OnHeadersEnd() {
 }
 
 bool RequestParser::ParseStartLine(const std::string& line) {
-  std::vector<std::string> strs;
-  split(strs, line, ' ', true);
+  std::vector<string_view> parts;
+  Split(line, ' ', true, &parts);
 
-  if (strs.size() != 3) {
+  if (parts.size() != 3) {
     return false;
   }
 
-  request_->set_method(std::move(strs[0]));
-  request_->set_url(Url(strs[1]));
+  request_->set_method(parts[0]);
+  request_->set_url(Url{ parts[1] });
 
   // HTTP version is ignored.
 
@@ -50,14 +52,10 @@ bool RequestParser::ParseStartLine(const std::string& line) {
 }
 
 bool RequestParser::ParseContent(const char* data, std::size_t length) {
-  if (chunked_) {
-    return ParseChunkedContent(data, length);
+  if (content_type_.multipart()) {
+    return ParseMultipartContent(data, length);
   } else {
-    if (content_type_.multipart()) {
-      return ParseMultipartContent(data, length);
-    } else {
-      return ParseFixedContent(data, length);
-    }
+    return Parser::ParseContent(data, length);
   }
 }
 
@@ -99,7 +97,7 @@ bool RequestParser::ParseMultipartContent(const char* data,
       if (ParsePartHeaders(&need_more_data)) {
         // Go to next step.
         step_ = Step::kHeadersParsed;
-        LOG_INFO("Part headers just ended.");
+        LOG_INFO("Part headers just ended");
         continue;
       } else {
         if (need_more_data) {
@@ -115,16 +113,17 @@ bool RequestParser::ParseMultipartContent(const char* data,
       std::size_t off = 0;
       std::size_t count = 0;
       bool ended = false;
+
       // TODO: Remember last CRLF position.
       if (!GetNextBoundaryLine(&off, &count, &ended)) {
-        // Wait until next boundary.
         break;
       }
 
-      LOG_INFO("Next boundary found.");
+      // Next boundary found.
+      LOG_INFO("Next boundary found, off=%u", off);
 
       // This part has ended.
-      if (off > 2) {
+      if (off >= 2) {
         // -2 for excluding the CRLF after the data.
         part_->AppendData(pending_data_.data(), off - 2);
 
@@ -132,7 +131,7 @@ bool RequestParser::ParseMultipartContent(const char* data,
         // +2 for including the CRLF after the boundary.
         pending_data_.erase(0, off + count + 2);
       } else {
-        LOG_ERRO("Invalid part data.");
+        LOG_ERRO("Invalid part data, off=%u", off);
         return false;
       }
 
@@ -155,7 +154,7 @@ bool RequestParser::ParseMultipartContent(const char* data,
   }
 
   if (step_ == Step::kEnded) {
-    LOG_INFO("Multipart data has ended.");
+    LOG_INFO("Multipart data has ended");
 
     // Create a body and set to the request.
 
@@ -189,17 +188,17 @@ bool RequestParser::ParsePartHeaders(bool* need_more_data) {
     }
 
     Header header;
-    if (!split_kv(header.first, header.second, line, ':')) {
+    if (!SplitKV(line, ':', true, &header.first, &header.second)) {
       LOG_ERRO("Invalid part header line: %s", line.c_str());
       return false;
     }
 
-    LOG_INFO("Part header (%s: %s).", header.first.c_str(),
+    LOG_INFO("Part header (%s: %s)", header.first.c_str(),
              header.second.c_str());
 
     // Parse Content-Disposition.
-    if (iequals(header.first, headers::kContentDisposition)) {
-      ContentDisposition content_disposition(header.second);
+    if (boost::iequals(header.first, headers::kContentDisposition)) {
+      ContentDisposition content_disposition{ header.second };
       if (!content_disposition.valid()) {
         LOG_ERRO("Invalid content-disposition header: %s",
                  header.second.c_str());
@@ -220,8 +219,7 @@ bool RequestParser::ParsePartHeaders(bool* need_more_data) {
   return true;
 }
 
-bool RequestParser::GetNextBoundaryLine(std::size_t* b_off,
-                                        std::size_t* b_count,
+bool RequestParser::GetNextBoundaryLine(std::size_t* b_off, std::size_t* b_len,
                                         bool* ended) {
   std::size_t off = 0;
 
@@ -231,15 +229,15 @@ bool RequestParser::GetNextBoundaryLine(std::size_t* b_off,
       break;
     }
 
-    std::size_t count = pos - off;
-    if (count == 0) {
+    std::size_t len = pos - off;
+    if (len == 0) {
       off = pos + 2;
       continue;  // Empty line
     }
 
-    if (IsBoundary(pending_data_, off, count, ended)) {
+    if (IsBoundary(pending_data_, off, len, ended)) {
       *b_off = off;
-      *b_count = count;
+      *b_len = len;
       return true;
     }
 
@@ -269,7 +267,7 @@ bool RequestParser::IsBoundary(const std::string& str, std::size_t off,
       *end = true;
     }
   }
-  
+
   return strncmp(boundary.c_str(), &str[off + 2], boundary.size()) == 0;
 }
 

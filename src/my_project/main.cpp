@@ -12,8 +12,9 @@ int main() {
   try {
     auto r = session.Send(WEBCC_GET("http://httpbin.org/get")());
 
-    std::cout << r->status() << std::endl << r->data() << std::endl;
-
+    if (r->status() == webcc::kOK) {
+      std::cout << r->data() << std::endl;
+    }
   } catch (const webcc::Error& error) {
     std::cerr << error << std::endl;
     return 1;

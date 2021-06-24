@@ -4,8 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "boost/filesystem/path.hpp"
-
+#include "webcc/fs.h"
 #include "webcc/request.h"
 #include "webcc/response.h"
 
@@ -62,13 +61,13 @@ public:
     return *this;
   }
 
-  ResponseBuilder& MediaType(const std::string& media_type) {
-    media_type_ = media_type;
+  ResponseBuilder& MediaType(string_view media_type) {
+    media_type_ = ToString(media_type);
     return *this;
   }
 
-  ResponseBuilder& Charset(const std::string& charset) {
-    charset_ = charset;
+  ResponseBuilder& Charset(string_view charset) {
+    charset_ = ToString(charset);
     return *this;
   }
 
@@ -96,15 +95,10 @@ public:
 
   // Use the file content as body.
   // NOTE: Error::kFileError might be thrown.
-  ResponseBuilder& File(const boost::filesystem::path& path,
-                        bool infer_media_type = true,
+  ResponseBuilder& File(const fs::path& path, bool infer_media_type = true,
                         std::size_t chunk_size = 1024);
 
-  ResponseBuilder& Header(const std::string& key, const std::string& value) {
-    headers_.push_back(key);
-    headers_.push_back(value);
-    return *this;
-  }
+  ResponseBuilder& Header(string_view key, string_view value);
 
   // Add the `Date` header to the response.
   ResponseBuilder& Date();
